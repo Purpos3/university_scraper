@@ -22,7 +22,6 @@ This Python-based tool scrapes SVG logos of German universities from **Wikipedia
 - Downloads the SVGs and stores them in a specified folder.
 - Converts the downloaded SVGs to **Base64 URI format** for embedding in web or mobile applications.
 - Stores both the original SVG files and URI-encoded versions in separate folders.
-- Supports approximately 50 universities and is easily extendable.
 
 ## Prerequisites
 
