@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "city": {
+      "type": "string"
+    }
+  },
+  "required": ["name", "city", "country", "website", "logo_url", "whed_id"],
+  "additionalProperties": false
+}
