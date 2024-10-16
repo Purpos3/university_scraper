@@ -32,4 +32,4 @@ This Python-based tool scrapes SVG logos of German universities from **Wikipedia
 
 ```bash
 pip install beautifulsoup4 requests
->>>>>>> f5a4641 (Update README.md)
+```
