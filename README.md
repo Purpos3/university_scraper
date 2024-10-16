@@ -10,7 +10,8 @@ Data includes:
 
 Credits for Github action: 
 https://github.com/marketplace/actions/json-yaml-validate
-=======
+
+
 # University Logo Scraper and URI Converter
 
 This Python-based tool scrapes SVG logos of German universities from **Wikipedia** and converts them into **Base64-encoded URIs** for easy embedding in Kotlin frontends or any other web projects.
