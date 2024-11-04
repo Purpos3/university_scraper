@@ -1,191 +1,180 @@
 import os
 import requests
 from bs4 import BeautifulSoup
-from time import sleep
+import json
 import base64
+import cairosvg
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from PIL import Image
+import time
+import logging
+import sys
 
-# Define a user agent for scraping
-USER_AGENT = "MyUniversityScraper/1.0 (https://example.com; info@example.com)"
+# Configuration for folders and log file
+USER_AGENT = "UniLogoScraperBot/1.0 (+https://purpose.hr; g.kobilarov@purpose.hr)"
 LOGO_FOLDER = "uni_logos"
 SVG_FOLDER = os.path.join(LOGO_FOLDER, "svgs")
 URI_FOLDER = os.path.join(LOGO_FOLDER, "uris")
+LOG_FILE = "scraper_log.txt"
 
-# Create the folders if they don't exist
+# Set up logging to capture any issues immediately
+logging.basicConfig(filename=LOG_FILE, level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.info("Starting logoscraper...")
+
+# Ensure folders exist
 os.makedirs(SVG_FOLDER, exist_ok=True)
 os.makedirs(URI_FOLDER, exist_ok=True)
 
-# Function to search Wikipedia and return the first relevant page URL (German Wikipedia)
-def get_wikipedia_page(title):
-    search_url = f"https://de.wikipedia.org/wiki/{title.replace(' ', '_')}"
-    headers = {'User-Agent': USER_AGENT}
-    
-    # Make a request to the German Wikipedia page
-    response = requests.get(search_url, headers=headers)
-    
-    if response.status_code == 200:
-        return search_url
-    else:
-        print(f"❌ Could not find a Wikipedia page for {title} (Status: {response.status_code})")
-        return None
+# Placeholder patterns and dimensions
+PLACEHOLDER_PATTERNS = ["Wikimedia-logo", "earth", "commons-logo"]
+PLACEHOLDER_DIMENSIONS = [(320, 320), (1, 1), (200, 200), (150, 150)]
 
-# Function to download SVG with retry and error handling
-def download_svg(url, filename):
-    headers = {
-        'User-Agent': USER_AGENT
-    }
-    retries = 3  # Number of retry attempts
-    for attempt in range(retries):
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                svg_path = os.path.join(SVG_FOLDER, filename)
-                with open(svg_path, 'wb') as file:
-                    file.write(response.content)
-                print(f"✅ Downloaded: {filename}")
-                return svg_path
-            else:
-                print(f"❌ Failed to download {url}: Status code {response.status_code}")
-        except Exception as e:
-            print(f"❌ Error downloading {url}: {e}")
-        sleep(2)  # Wait 2 seconds before retrying
-    print(f"❌ Failed to download {filename} after {retries} attempts.")
-    return None
+def sanitize_filename(name):
+    return "".join(c if c.isalnum() or c in (' ', '_') else "_" for c in name)
 
-# Function to convert an SVG file to a URI format suitable for Kotlin and save it in the uri folder
-def convert_svg_to_uri(svg_path, filename):
+def is_placeholder_image(url, image_size):
+    if any(placeholder in url for placeholder in PLACEHOLDER_PATTERNS):
+        return True
+    if image_size in PLACEHOLDER_DIMENSIONS:
+        return True
+    return False
+
+def get_logo_from_open_graph(website_url):
+    """Attempt to find a logo using Open Graph metadata from the university's website."""
     try:
-        with open(svg_path, 'rb') as svg_file:
-            svg_data = svg_file.read()
-            svg_base64 = base64.b64encode(svg_data).decode('utf-8')
-            svg_uri = f"data:image/svg+xml;base64,{svg_base64}"
-            
-            # Format the URI for Kotlin constant storage
-            kotlin_formatted_uri = f'val {filename.replace(".svg", "")}Uri = "{svg_uri}"'
-            
-            # Save it in a .kt file in the uris folder
-            uri_filename = filename.replace('.svg', '_uri.kt')
-            uri_path = os.path.join(URI_FOLDER, uri_filename)
-            with open(uri_path, 'w') as uri_file:
-                uri_file.write(kotlin_formatted_uri)
-            print(f"✅ Converted {filename} to URI and saved in {uri_filename}")
-            return True
-    except Exception as e:
-        print(f"❌ Failed to convert {filename} to URI: {e}")
-        return False
-
-# Function to extract the SVG file URL from the file description page
-def get_svg_from_description_page(description_url):
-    headers = {'User-Agent': USER_AGENT}
-    response = requests.get(description_url, headers=headers)
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, 'html.parser')
-        # The actual image URL is usually within a full media URL link with class 'internal'
-        svg_link = soup.find('a', class_='internal')
-        if svg_link and svg_link['href'].endswith('.svg'):
-            return 'https:' + svg_link['href']
-    return None
-
-# Function to find the logo SVG in the Wikipedia page content
-def find_svg_in_wikipedia_page(page_url):
-    headers = {'User-Agent': USER_AGENT}
-    try:
-        response = requests.get(page_url, headers=headers)
+        headers = {'User-Agent': USER_AGENT}
+        response = requests.get(website_url, headers=headers)
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
-            # Search for the link to the file description page (in German Wikipedia, it will still be "Datei")
-            file_page_link = soup.find('a', href=lambda x: x and 'Datei:' in x)
-            if file_page_link:
-                description_url = 'https://de.wikipedia.org' + file_page_link['href']
-                return get_svg_from_description_page(description_url)
-        print(f"❌ Failed to find SVG in the page {page_url}")
+            og_image = soup.find('meta', property='og:image')
+            if og_image and og_image['content']:
+                return og_image['content']
     except Exception as e:
-        print(f"❌ Error accessing {page_url}: {e}")
+        logging.error(f"Error fetching Open Graph logo for {website_url}: {e}")
     return None
 
-# List of universities to search and scrape SVG logos (in German)
-universities = [
-"Friedrich-Alexander-Universität Erlangen-Nürnberg",
-    "Technische Universität München",
-    "Ludwig-Maximilians-Universität München",
-    "Rheinische Friedrich-Wilhelms-Universität Bonn",
-    "Freie Universität Berlin",
-    "Humboldt-Universität zu Berlin",
-    "Universität Hamburg",
-    "Georg-August-Universität Göttingen",
-    "Karlsruher Institut für Technologie",
-    "Johannes Gutenberg-Universität Mainz",
-    "Eberhard Karls Universität Tübingen",
-    "Heinrich-Heine-Universität Düsseldorf",
-    "Universität Stuttgart",
-    "Leibniz Universität Hannover",
-    "Ruhr-Universität Bochum",
-    "Universität zu Köln",
-    "Universität Leipzig",
-    "Christian-Albrechts-Universität zu Kiel",
-    "Universität Mannheim",
-    "Universität Passau",
-    "Universität Augsburg",
-    "Technische Universität Dresden",
-    "Technische Universität Dortmund",
-    "Technische Universität Berlin",
-    "Technische Universität Braunschweig",
-    "Bauhaus-Universität Weimar",
-    "Universität Potsdam",
-    "Universität Konstanz",
-    "Universität Ulm",
-    "Universität Bielefeld",
-    "Universität Bremen",
-    "Universität Regensburg",
-    "Universität Trier",
-    "Universität Hohenheim",
-    "Universität Oldenburg",
-    "Universität Paderborn",
-    "Universität Wuppertal",
-    "Universität Bayreuth",
-    "Europa-Universität Viadrina",
-    "Frankfurt School of Finance & Management",
-    "Universität der Bundeswehr München",
-    "Jacobs University Bremen",
-    "Universität des Saarlandes",
-    "Hertie School of Governance",
-    "Technische Universität Kaiserslautern",
-    "Universität Erfurt",
-    "Helmut-Schmidt-Universität Hamburg",
-    "Universität Siegen",
-    "Universität Koblenz-Landau",
-    "Universität Flensburg"
-]
-
-# Main loop to search, find, and download SVG logos for universities
-success_count = 0
-failure_count = 0
-
-for university in universities:
-    print(f"🔍 Searching for {university} German Wikipedia page...")
-    page_url = get_wikipedia_page(university)
+def get_wikipedia_page_via_api(title, lang_code="en"):
+    search_url = f"https://{lang_code}.wikipedia.org/w/api.php"
+    headers = {'User-Agent': USER_AGENT}
+    params = {'action': 'query', 'list': 'search', 'srsearch': title, 'format': 'json'}
     
-    if page_url:
-        print(f"🔗 Found Wikipedia page: {page_url}")
-        svg_url = find_svg_in_wikipedia_page(page_url)
-        if svg_url:
-            print(f"🔗 Found SVG URL: {svg_url}")
-            filename = university.replace(" ", "_").replace("ä", "ae").replace("ü", "ue").replace("ö", "oe").replace("ß", "ss") + ".svg"
-            svg_path = download_svg(svg_url, filename)
-            if svg_path:
-                success_count += 1
-                # Convert to URI format and save in the uris folder
-                convert_svg_to_uri(svg_path, filename)
-            else:
-                print(f"❌ Failed to download SVG for {university}")
-                failure_count += 1
-        else:
-            print(f"❌ No SVG found for {university}")
-            failure_count += 1
-    else:
-        print(f"❌ Could not find Wikipedia page for {university}")
-        failure_count += 1
+    response = requests.get(search_url, headers=headers, params=params)
+    if response.status_code == 200:
+        search_results = response.json().get('query', {}).get('search', [])
+        if search_results:
+            page_title = search_results[0]['title']
+            page_url = f"https://{lang_code}.wikipedia.org/wiki/{page_title.replace(' ', '_')}"
+            return page_url, True
+    return None, False
 
-# Final Summary
-print("\n🎉 Download Summary:")
-print(f"✅ Successful downloads: {success_count}")
-print(f"❌ Failed downloads: {failure_count}")
+def find_logo_image(soup):
+    svg_link = soup.find('a', class_='internal', href=lambda href: href and href.endswith('.svg'))
+    if svg_link:
+        return 'https:' + svg_link['href']
+    
+    img_tags = soup.find_all('img')
+    for img in img_tags:
+        img_src = img.get('src', '').lower()
+        if 'logo' in img_src and not is_placeholder_image(img_src, None):
+            return 'https:' + img['src']
+    return None
+
+def download_image(url, filename):
+    headers = {'User-Agent': USER_AGENT}
+    retries = 3
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                file_path = os.path.join(SVG_FOLDER, filename)
+                with open(file_path, 'wb') as file:
+                    file.write(response.content)
+                
+                # Verify if the image is not a placeholder
+                with Image.open(file_path) as img:
+                    if is_placeholder_image(url, img.size):
+                        logging.info(f"Placeholder image detected for {filename}, skipping.")
+                        os.remove(file_path)
+                        return None
+                logging.info(f"Successfully downloaded image for {filename}")
+                return file_path
+        except requests.RequestException as e:
+            logging.warning(f"Attempt {attempt + 1} - Error downloading image from {url}: {e}")
+            time.sleep(2 ** attempt)
+    logging.error(f"Failed to download image from {url} after {retries} attempts.")
+    return None
+
+def convert_image_to_svg(filepath):
+    svg_path = filepath.rsplit(".", 1)[0] + ".svg"
+    try:
+        if not filepath.endswith(".svg"):
+            cairosvg.png2svg(url=filepath, write_to=svg_path)
+            logging.info(f"Converted {filepath} to SVG at {svg_path}")
+        return svg_path
+    except Exception as e:
+        logging.error(f"Error converting {filepath} to SVG: {e}")
+    return None
+
+def convert_image_to_uri(filepath, filename):
+    try:
+        with open(filepath, 'rb') as file:
+            encoded_string = base64.b64encode(file.read()).decode('utf-8')
+            uri_content = f'data:image/{filename.split(".")[-1]};base64,{encoded_string}'
+            uri_filename = filename.replace(".", "_") + ".uri"
+            uri_path = os.path.join(URI_FOLDER, uri_filename)
+            with open(uri_path, 'w') as uri_file:
+                uri_file.write(uri_content)
+            logging.info(f"Converted {filename} to URI and saved in {uri_path}")
+            return True
+    except Exception as e:
+        logging.error(f"Failed to convert {filename} to URI: {e}")
+    return False
+
+def process_university(university):
+    uni_name = university.get("original_name", "")
+    lang_code = university.get("country_code", "en")
+    
+    try:
+        page_url, success = get_wikipedia_page_via_api(uni_name, lang_code)
+        if success:
+            response = requests.get(page_url, headers={'User-Agent': USER_AGENT})
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            img_url = find_logo_image(soup) or get_logo_from_open_graph(university.get("sub_link"))
+            if img_url:
+                filename = sanitize_filename(uni_name) + os.path.splitext(img_url)[1]
+                file_path = download_image(img_url, filename)
+                if file_path:
+                    if not file_path.endswith(".svg"):
+                        file_path = convert_image_to_svg(file_path) or file_path
+                    
+                    if convert_image_to_uri(file_path, filename):
+                        logging.info(f"Successfully processed logo for {uni_name}")
+                        return True
+        logging.warning(f"Failed to process logo for {uni_name}")
+    except Exception as e:
+        logging.error(f"Error processing {uni_name}: {e}")
+    return False
+
+# Main execution block with error handling
+try:
+    print("Script started", flush=True)
+    logging.info("Logoscraper main execution started.")
+
+    # Load university data
+    with open("universities_data.json", "r", encoding="utf-8") as file:
+        universities_data = json.load(file)
+
+    # Process universities in parallel
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(process_university, uni) for uni in universities_data]
+        for future in as_completed(futures):
+            result = future.result()
+
+    logging.info("Logoscraper finished successfully.")
+    print("Script completed", flush=True)
+
+except Exception as e:
+    logging.error(f"An unexpected error occurred: {e}")
+    print(f"An error occurred: {e}", flush=True)
+    sys.exit(1)

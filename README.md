@@ -1,17 +1,3 @@
-# european_universities
-A curated list of European universities available in multiple formats: json, yaml.
-Data includes:
- - name
- - city
- - country
- - website
- - logo_url
- - whed_id - unique WHED ID number 
-
-Credits for Github action: 
-https://github.com/marketplace/actions/json-yaml-validate
-
-
 # University Logo Scraper and URI Converter
 
 This Python-based tool scrapes SVG logos of German universities from **Wikipedia** and converts them into **Base64-encoded URIs** for easy embedding in Kotlin frontends or any other web projects.
